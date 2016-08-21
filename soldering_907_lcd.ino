@@ -427,11 +427,10 @@ class DSPL : protected LiquidCrystal {
     DSPL(byte RS, byte E, byte DB4, byte DB5, byte DB6, byte DB7) : LiquidCrystal(RS, E, DB4, DB5, DB6, DB7) { }
     void init(void);
     void clear(void) { LiquidCrystal::clear(); }
-    void tSet(uint16_t t);                      // Show the temperature set
+    void tSet(uint16_t t, bool celsuis);        // Show the temperature set
     void tCurr(uint16_t t);                     // Show The current temperature
     void pSet(byte p);                          // Show the power set
     void tempLim(byte indx, uint16_t temp);     // Show the upper or lower temperature limit
-    void msgClear(byte str);                    // Clear message area on the line str
     void msgNoIron(void);                       // Show 'No iron' message
     void msgReady(void);                        // Show 'Ready' message
     void msgOn(void);                           // Show 'On' message
@@ -458,17 +457,24 @@ void DSPL::init(void) {
   LiquidCrystal::clear();
 }
 
-void DSPL::tSet(uint16_t t) {
+void DSPL::tSet(uint16_t t, bool celsius) {
   char buff[5];
+  char units = 'C';
+  if (!celsius) units = 'F';
   LiquidCrystal::setCursor(0, 0);
-  sprintf(buff, "%3d", t);
+  sprintf(buff, "%3d%c", t, units);
   LiquidCrystal::print(buff);
 }
 
 void DSPL::tCurr(uint16_t t) {
-  char buff[5];
+  char buff[4];
   LiquidCrystal::setCursor(0, 1);
-  sprintf(buff, "%3d", t);
+  if (t < 1000) {
+    sprintf(buff, "%3d", t);
+  } else {
+    LiquidCrystal::print(F("xxx"));
+    return;
+  }
   LiquidCrystal::print(buff);
 }
 
@@ -493,39 +499,34 @@ void DSPL::tempLim(byte indx, uint16_t temp) {
   LiquidCrystal::print(buff);
 }
 
-void DSPL::msgClear(byte str) {
-  LiquidCrystal::setCursor(3, str);
-  LiquidCrystal::print(F("     "));
-}
-
 void DSPL::msgNoIron(void) {
   LiquidCrystal::setCursor(0, 1);
   LiquidCrystal::print(F("no iron "));
 }
 
 void DSPL::msgReady(void) {
-  LiquidCrystal::setCursor(3, 0);
-  LiquidCrystal::print(F("  rdy"));
+  LiquidCrystal::setCursor(4, 0);
+  LiquidCrystal::print(F(" rdy"));
 }
 
 void DSPL::msgOn(void) {
-  LiquidCrystal::setCursor(3, 0);
-  LiquidCrystal::print(F("   ON"));
+  LiquidCrystal::setCursor(4, 0);
+  LiquidCrystal::print(F("  ON"));
 }
 
 void DSPL::msgOff(void) {
-  LiquidCrystal::setCursor(3, 0);
-  LiquidCrystal::print(F("  OFF"));
+  LiquidCrystal::setCursor(4, 0);
+  LiquidCrystal::print(F(" OFF"));
 }
 
 void DSPL::msgCold(void) {
-  LiquidCrystal::setCursor(3, 1);
-  LiquidCrystal::print(F(" cold"));
+  LiquidCrystal::setCursor(0, 1);
+  LiquidCrystal::print(F("  cold  "));
 }
 
 void DSPL::msgFail(void) {
   LiquidCrystal::setCursor(0, 1);
-  LiquidCrystal::print(F("Failed "));
+  LiquidCrystal::print(F(" Failed "));
 }
 
 void DSPL::msgTune(void) {
@@ -727,11 +728,13 @@ class IRON : protected PID {
       unit_celsius = true;
       fix_power = false;
       unit_celsius = true;
+      no_iron = true;
     }
     void     init(uint16_t t_max, uint16_t t_min);
     void     switchPower(bool On);
     bool     isOn(void)                         { return on; }
     bool     isCold(void)                       { return (h_temp.last() < temp_cold); }
+    bool     noIron(void)                       { return no_iron; }
     void     setTempUnits(bool celsius)         { unit_celsius = celsius; }
     bool     getTempUnits(void)                 { return unit_celsius; }
     uint16_t getTemp(void)                      { return temp_set; }
@@ -758,6 +761,7 @@ class IRON : protected PID {
     byte       actual_power;                    // The power supplied to the iron
     bool       on;                              // Weither the soldering iron is on
     bool       fix_power;                       // Weither the soldering iron is set the fix power
+    bool       no_iron;                         // Weither the iron is connected
     bool       unit_celsius;                    // Human readable units for the temparature (celsius or farenheit)
     int        temp_set;                        // The temperature that should be keeped
     bool       iron_checked;                    // Weither the iron works
@@ -768,6 +772,7 @@ class IRON : protected PID {
     HISTORY    h_power;
     HISTORY    h_temp;
     const uint16_t temp_cold   = 340;           // The cold temperature to touch the iron safely
+    const uint16_t temp_no_iron = 980;          // Sensor reading whae the iron disconnected
     const byte max_power       = 180;           // maximum power to the iron (220)
     const byte max_fixed_power = 120;           // Maximum power in fiexed power mode
     const byte delta_t         = 2;             // The measurement error of the temperature
@@ -856,25 +861,34 @@ void IRON::switchPower(bool On) {
 }
 
 uint16_t IRON::temp(void) {
+  int16_t temp = 0;
   if (actual_power > 0) fastPWMdac.analogWrite8bit(0);
   int16_t t1 = analogRead(sPIN);
   delayMicroseconds(500);
   int16_t t2 = analogRead(sPIN);
   if (actual_power > 0) fastPWMdac.analogWrite8bit(actual_power);
+
   if (abs(t1 - t2) < 10) {
     t1 += t2 + 1;
     t1 >>= 1;                                   // average of two measurements
-    h_temp.put(t1);
-    return t1;
-  }
-  int tprev = h_temp.last();
-  if (abs(t1 - tprev) < abs(t2 - tprev)) {
-    h_temp.put(t1);
-    return t1;
+    temp = t1;
   } else {
-    h_temp.put(t2);
-    return t2;
+    int tprev = h_temp.last();
+    if (abs(t1 - tprev) < abs(t2 - tprev))
+      temp = t1;
+    else
+      temp = t2;
   }
+
+  // If the power is off and no iron detected, do not put the temperature into the history 
+  if (!on && !fix_power && (temp > temp_no_iron)) {
+    no_iron = true;
+  } else {
+    no_iron = false;
+    h_temp.put(temp);
+  }
+
+  return temp;
 }
 
 void IRON::keepTemp(void) {
@@ -1030,7 +1044,7 @@ void mainSCREEN::init(void) {
     pEnc->reset(tempH, temp_minF, temp_maxF, 1, 5);
   update_screen = millis();
   pD->clear();
-  pD->tSet(tempH);
+  pD->tSet(tempH, is_celsius);
   pD->msgOff();
   forceRedraw();
   uint16_t temp = pIron->tempAverage();
@@ -1044,7 +1058,7 @@ void mainSCREEN::init(void) {
 void mainSCREEN::rotaryValue(int16_t value) {
   update_screen = millis() + period;
   pIron->setTempHumanUnits(value);
-  pD->tSet(value);
+  pD->tSet(value, is_celsius);
 }
 
 void mainSCREEN::show(void) {
@@ -1053,21 +1067,24 @@ void mainSCREEN::show(void) {
   force_redraw = false;
   update_screen = millis();
 
-  uint16_t temp = pIron->tempAverage();
-  if (temp > 980) {                             // No iron connected
+  if (pIron->noIron()) {                        // No iron connected
     pD->msgNoIron();
     no_iron = true;                             // 'no iron' message is displayed
     return;
   } else {
    if (no_iron) {                               // clear the 'no iron' message
     no_iron = false;
-    pD->msgClear(1);
+    pD->clear();
+    uint16_t temp_set = pIron->getTemp();
+    temp_set = pIron->temp2humanUnits(temp_set);
+    pD->tSet(temp_set, is_celsius);
+    pD->msgOff();
    }
   }
 
   update_screen += period;
+  uint16_t temp = pIron->tempAverage();
   temp = pIron->temp2humanUnits(temp);
-  pD->tCurr(temp);
   if (used && pIron->isCold()) {
     pD->msgCold();
     if (!cool_notified) {
@@ -1075,12 +1092,8 @@ void mainSCREEN::show(void) {
       cool_notified = true;
     }
   } else {
+    pD->tCurr(temp);
     pD->msgOff();
-    if (used && !cool_notified) {
-      pD->cooling();
-      byte hot = pIron->hotPercent();
-      pD->percent(hot);
-    }
   }
 }
 
@@ -1119,7 +1132,7 @@ void workSCREEN::init(void) {
   pIron->switchPower(true);
   ready = false;
   pD->clear();
-  pD->tSet(tempH);
+  pD->tSet(tempH, is_celsius);
   pD->msgOn();
   forceRedraw();
 }
@@ -1129,7 +1142,7 @@ void workSCREEN::rotaryValue(int16_t value) {
   pD->msgOn();
   update_screen = millis() + period;
   pIron->setTempHumanUnits(value);
-  pD->tSet(value);
+  pD->tSet(value, pIron->getTempUnits());
 }
 
 void workSCREEN::show(void) {
