@@ -258,13 +258,23 @@ void CONFIG::setDefaults(bool Write) {          // Restore default values
 //------------------------------------------ class BUZZER ------------------------------------------------------
 class BUZZER {
   public:
-    BUZZER(byte BuzzerPIN) { buzzerPIN = BuzzerPIN; }
-    void  shortBeep(void)  { tone(buzzerPIN, 3520, 160); }
-    void  lowBeep(void)    { tone(buzzerPIN,  880, 160); }
-    void  doubleBeep(void) { tone(buzzerPIN, 3520, 160); delay(300); tone(buzzerPIN, 3520, 160); }
+    BUZZER(byte buzzerP)  { buzzer_pin = buzzerP; }
+    void init(void);
+    void shortBeep(void)  { tone(buzzerPIN, 3520, 160); }
+    void lowBeep(void)    { tone(buzzerPIN,  880, 160); }
+    void doubleBeep(void) { tone(buzzerPIN, 3520, 160); delay(300); tone(buzzerPIN, 3520, 160); }
+    void failedBeep(void) { tone(buzzerPIN, 3520, 160); delay(170);
+                            tone(buzzerPIN,  880, 250); delay(260);
+                            tone(buzzerPIN, 3520, 160);
+                          }
   private:
-    byte buzzerPIN;
+    byte buzzer_pin;
 };
+
+void BUZZER::init(void) {
+  pinMode(buzzer_pin, OUTPUT);
+  noTone(buzzer_pin);
+}
 
 //------------------------------------------ class BUTTON ------------------------------------------------------
 class BUTTON {
@@ -632,41 +642,51 @@ void DSPL::percent(byte Power) {
 #define H_LENGTH 16
 class HISTORY {
   public:
-    HISTORY(void) { len = 0; }
-    void init(void) { len = 0; }
-    void put(int item) {
-      if (len < H_LENGTH) {
-        queue[len++] = item;
-      } else {
-        for (byte i = 0; i < len-1; ++i) queue[i] = queue[i+1];
-        queue[H_LENGTH-1] = item;
-      }
-    }
-    bool  isFull(void)                          { return len == H_LENGTH; }
-    int   last(void)                            { return queue[len-1]; }
-    int   top(void)                             { return queue[0]; }
-    int   average(void);
-    float dispersion(void);
-    float gradient(void);
+    HISTORY(void)                               { len = 0; }
+    void     init(void)                         { len = 0; }
+    bool     isFull(void)                       { return len == H_LENGTH; }
+    uint16_t last(void);
+    uint16_t top(void)                          { return queue[0]; }
+    void     put(uint16_t item);                // Put new entry to the history
+    uint16_t average(void);                     // calcilate the average value
+    float    dispersion(void);                  // calculate the math dispersion
+    float    gradient(void);                    // calculate the gradient of the history values
   private:
-    int queue[H_LENGTH];
-    byte len;
+    uint16_t queue[H_LENGTH];
+    byte len;                                   // The number of elements in the queue
+    byte index;                                 // The current element position, use ring buffer
 };
 
-int HISTORY::average(void) {
-  long sum = 0;
+void HISTORY::put(uint16_t item) {
+  if (len < H_LENGTH) {
+    queue[len++] = item;
+  } else {
+    queue[index ] = item;
+    if (++index >= H_LENGTH) index = 0;         // Use ring buffer
+  }
+}
+
+uint16_t HISTORY::last(void) {
+  byte i = H_LENGTH - 1;
+  if (index)
+    i = index - 1;
+  return queue[i];
+}
+
+uint16_t HISTORY::average(void) {
+  uint32_t sum = 0;
   if (len == 0) return 0;
   if (len == 1) return queue[0];
   for (byte i = 0; i < len; ++i) sum += queue[i];
   sum += len >> 1;                              // round the average
   sum /= len;
-  return (int)sum;
+  return uint16_t(sum);
 }
 
 float HISTORY::dispersion(void) {
   if (len < 3) return 1000;
-  long sum = 0;
-  long avg = average();
+  uint32_t sum = 0;
+  uint32_t avg = average();
   for (byte i = 0; i < len; ++i) {
     long q = queue[i];
     q -= avg;
@@ -685,9 +705,9 @@ float HISTORY::gradient(void) {
   sx = sx_sq = sxy = sy = 0;
   for (byte i = 1; i <= len; ++i) {
     sx    += i;
-  sx_sq += i*i;
-  sxy   += i*queue[i-1];
-  sy    += queue[i-1];
+    sx_sq += i*i;
+    sxy   += i*queue[i-1];
+    sy    += queue[i-1];
   }
   long numerator   = len * sxy - sx * sy;
   long denominator = len * sx_sq - sx * sx;
@@ -708,28 +728,35 @@ class PID {
   public:
     PID(void) {
       Kp = 768;
-      Ki = 192;
-      Kd = 640;
+      Ki =  30;
+      Kd = 196;
     }
     void resetPID(int temp = -1);               // reset PID algoritm history parameters
     // Calculate the power to be applied
-    int reqPower(int temp_set, int temp_curr, int power);
+    int reqPower(int temp_set, int temp_curr);
     int changePID(byte p, int k);
   private:
     void  debugPID(int t_set, int t_curr, long kp, long ki, long kd, long delta_p);
-    int  temp_hist[2];                          // previously measured temperature
-    bool  pid_iterate;                          // Whether the inerative PID formulae can be used
+    int   temp_h0, temp_h1;                     // previously measured temperature
+    int   temp_diff_iterate;                    // The temperature difference to start iterate process
+    bool  pid_iterate;                          // Whether the iterative process is used
+    long  i_summ;                               // Ki summary multiplied by denominator
+    long  power;                                // The power iterative multiplied by denominator
     long  Kp, Ki, Kd;                           // The PID algorithm coefficients multiplied by denominator
     const byte denominator_p = 8;               // The common coefficeient denominator power of 2 (8 means divide by 256)
 };
 
 void PID::resetPID(int temp) {
+  temp_h0 = 0;
+  power  = 0;
+  i_summ = 0;
   pid_iterate = false;
-  temp_hist[0] = 0;
-  if (temp > 0)
-    temp_hist[1] = temp;
+  temp_diff_iterate = 30;//(temp + 5) / 10;
+  if (temp_diff_iterate < 30) temp_diff_iterate = 30;
+  if ((temp > 0) && (temp < 1000))
+    temp_h1 = temp;
   else
-    temp_hist[1] = 0;
+    temp_h1 = 0;
 }
 
 int PID::changePID(byte p, int k) {
@@ -749,39 +776,38 @@ int PID::changePID(byte p, int k) {
   return 0;
 }
 
-int PID::reqPower(int temp_set, int temp_curr, int power) {
-  if (temp_hist[0] == 0) {                      // first, use the direct formulae, not the iterate process
-    long p = (long)Kp*(temp_set - temp_curr) + (long)Ki*(temp_set - temp_curr);
-    p += (1 << (denominator_p-1));
-    p >>= denominator_p;
-    temp_hist[1] = temp_curr;
-    if ((temp_set - temp_curr) < 30) {          // If the temperature is near, prepare the PID iteration process
-      if (!pid_iterate) {                       // The first loop
+int PID::reqPower(int temp_set, int temp_curr) {
+  if (temp_h0 == 0) {
+    // When the temperature is near the preset one, reset the PID and prepare iterative formulae                        
+    if ((temp_set - temp_curr) < temp_diff_iterate) {
+      if (!pid_iterate) {
         pid_iterate = true;
-      } else {                                  // The second loop
-        temp_hist[0] = temp_hist[1];            // Now we are redy to use iterate algorythm
+        power = 0;
+        i_summ = 0;
       }
     }
-    power = p;
+    i_summ += temp_set - temp_curr;             // first, use the direct formulae, not the iterate process
+    power = Kp*(temp_set - temp_curr) + Ki*i_summ;
+    // If the temperature is near, prepare the PID iteration process
   } else {
-    long kp = Kp * (temp_hist[1] - temp_curr);
+    long kp = Kp * (temp_h1 - temp_curr);
     long ki = Ki * (temp_set - temp_curr);
-    long kd = Kd * (temp_hist[0] + temp_curr - 2*temp_hist[1]);
+    long kd = Kd * (temp_h0 + temp_curr - 2*temp_h1);
     long delta_p = kp + ki + kd;
-    delta_p += (1 << (denominator_p-1));
-    delta_p >>= denominator_p;
-//    debugPID(temp_set, temp_curr, kp, ki, kd, delta_p);
-    power += delta_p;
-    temp_hist[0] = temp_hist[1];
-    temp_hist[1] = temp_curr;
+    //debugPID(temp_set, temp_curr, kp, ki, kd, delta_p);
+    power += delta_p;                           // power keeped multiplied by denominator!
   }
-  return power;
+  if (pid_iterate) temp_h0 = temp_h1;
+  temp_h1 = temp_curr;
+  long pwr = power + (1 << (denominator_p-1));  // prepare the power to delete by denominator, roud the result
+  pwr >>= denominator_p;                        // delete by the denominator
+  return int(pwr);
 }
 
 void PID::debugPID(int t_set, int t_curr, long kp, long ki, long kd, long delta_p) {
   Serial.print(t_set-t_curr); Serial.print(": ");
-  Serial.print("[ "); Serial.print(temp_hist[0]);
-  Serial.print(", "); Serial.print(temp_hist[1]);
+  Serial.print("[ "); Serial.print(temp_h0);
+  Serial.print(", "); Serial.print(temp_h1);
   Serial.print(", "); Serial.print(t_curr);
   Serial.print(" ] kp = "); Serial.print(kp);
   Serial.print(", ki = "); Serial.print(ki);
@@ -850,7 +876,7 @@ class IRON : protected PID {
     const uint16_t temp_no_iron = 980;          // Sensor reading when the iron disconnected
     const byte max_power       = 180;           // maximum power to the iron (220)
     const byte max_fixed_power = 120;           // Maximum power in fiexed power mode
-    const uint16_t period      = 500;           // The period to check the soldering iron temperature, ms
+    const uint16_t period      = 200;           // The period to check the soldering iron temperature, ms
     const int check_time       = 10000;         // Time in ms to check Whether the solder is heating
     const int heat_expected    = 10;            // The iron should change the temperature at check_time
 };
@@ -934,55 +960,42 @@ void IRON::switchPower(bool On) {
   checkMS = millis();
 }
 
-uint16_t IRON::temp(void) {
+void IRON::keepTemp(void) {
+  if (checkMS > millis()) return;
+  checkMS = millis() + period;
+
+  if (!on) {                                    // If the soldering iron is set to be switched off
+    if (!fix_power)
+      fastPWMdac.analogWrite8bit(0);            // Surely power off the iron
+  }
+
   int16_t temp = 0;
-  if (actual_power > 0) fastPWMdac.analogWrite8bit(0);
+  if (actual_power > 0)
+    fastPWMdac.analogWrite8bit(0);              // switch-off supplied power to be more accurate
   delay(20);
   int16_t t1 = analogRead(sPIN);
   delayMicroseconds(50);
   int16_t t2 = analogRead(sPIN);
-  if (actual_power > 0) fastPWMdac.analogWrite8bit(actual_power);
+  if (actual_power > 0)                         // restore the power after measurement of the temperature
+    fastPWMdac.analogWrite8bit(actual_power);
 
-  if (abs(t1 - t2) < 10) {
+  if (abs(t1 - t2) < 10) {                      // use average of two samples if they are simiral
     t1 += t2 + 1;
     t1 >>= 1;                                   // average of two measurements
     temp = t1;
-  } else {
+  } else {                                      // use sample that is near to the previous
     int tprev = h_temp.last();
     if (abs(t1 - tprev) < abs(t2 - tprev))
       temp = t1;
     else
       temp = t2;
   }
-
-  // If the power is off and no iron detected, do not put the temperature into the history 
-  if (!on && !fix_power && (temp > temp_no_iron)) {
-    no_iron = true;
-  } else {
-    no_iron = false;
-    h_temp.put(temp);
-  }
-
-  return temp;
-}
-
-void IRON::keepTemp(void) {
-  if (checkMS > millis()) return;
-  checkMS = millis() + period;
-
-  int temp_curr = temp();                       // Read the temperature and save it to the history buffer periodically
-
-  if (!on) {                                    // If the soldering iron is set to be switched off
-    if (!fix_power)
-      fastPWMdac.analogWrite8bit(0);            // Surely power off the iron
-    return;
-  }
-   
+  
   // Check Whether the iron can be heated
   if (!iron_checked) {
     elapsed_time += period;
     if (elapsed_time >= check_time) {
-      if ((abs(temp_set - temp_curr) < 100) || ((temp_curr - temp_start) > heat_expected)) {
+      if ((abs(temp_set - temp) < 100) || ((temp - temp_start) > heat_expected)) {
         iron_checked = true;
       } else {
         switchPower(false);                     // Prevent the iron damage
@@ -993,8 +1006,16 @@ void IRON::keepTemp(void) {
     }
   }
 
+  // If the power is off and no iron detected, do not put the temperature into the history
+  if (!on && !fix_power && (temp > temp_no_iron)) {
+    no_iron = true;
+  } else {
+    no_iron = false;
+    h_temp.put(temp);
+  }
+
   // Use PID algoritm to calculate power to be applied
-  power = reqPower(temp_set, temp_curr, power);
+  power = reqPower(temp_set, temp);
   applyPower();
 }
 
@@ -1198,6 +1219,7 @@ class workSCREEN : public SCREEN {
     ENCODER* pEnc;                              // Pointer to the rotary encoder instance
     CONFIG*  pCfg;                              // Pointer to the configuration instance
     bool     ready;                             // Whether the iron is ready
+    uint32_t  auto_off_notified;                // The time (in ms) when the automatic power-off was notified
     HISTORY  idle_power;                        // The power supplied to the iron when it is not used
 	  const uint16_t period = 1000;               // The period to update the screen (ms)
 };
@@ -1219,6 +1241,7 @@ void workSCREEN::init(void) {
   uint16_t to = pCfg->getOffTimeout() * 60;
   this->setSCRtimeout(to);
   idle_power.init();
+  auto_off_notified = 0;
 }
 
 void workSCREEN::rotaryValue(int16_t value) {
@@ -1268,11 +1291,16 @@ void workSCREEN::show(void) {
     } else {
       if (ready && SCREEN::wasRecentlyReset()) {
         pD->msgWorking();
+        auto_off_notified = 0;
       } else {
         uint32_t to = (time_to_return - millis()) / 1000;
-        if ((scr_timeout > 0) && (to < 100))
+        if ((scr_timeout > 0) && (to < 100)) {
           pD->timeToOff(to);
-        else
+          if (!auto_off_notified || ((millis() - auto_off_notified) > 300000)) {
+            pBz->shortBeep();
+            auto_off_notified = millis();
+          }
+        } else
           pD->msgReady();
       }
     }
@@ -1291,12 +1319,14 @@ SCREEN* workSCREEN::returnToMain(void) {
 //---------------------------------------- class errorSCREEN [the soldering iron error detected] ---------------
 class errorSCREEN : public SCREEN {
   public:
-    errorSCREEN(DSPL* DSP) {
-      pD = DSP;
+    errorSCREEN(DSPL* DSP, BUZZER* BZ) {
+      pD  = DSP;
+      pBz = BZ;
     }
-    virtual void init(void) { pD->clear(); pD->msgFail(); }
+    virtual void init(void) { pD->clear(); pD->msgFail(); pBz->failedBeep(); }
   private:
-    DSPL* pD;                                   // Pointer to the display instance
+    DSPL*   pD;                                 // Pointer to the display instance
+    BUZZER* pBz;                                // Pointer to the buzzer instance
 };
 
 //---------------------------------------- class powerSCREEN [fixed power to the iron] -------------------------
@@ -1672,24 +1702,37 @@ class pidSCREEN : public SCREEN {
     IRON* pIron;                                // Pointer to the iron instance
     ENCODER* pEnc;                              // Pointer to the rotary encoder instance
     byte mode;                                  // Which temperature to tune [0-3]: select, Kp, Ki, Kd
+    uint32_t update_screen;                     // The time in ms when the screen should be updated
     int temp_set;
+    const uint16_t period = 500;                // The period the screen to be updated
 };
 
 void pidSCREEN::init(void) {
   temp_set = pIron->getTemp();
   mode = 0;                                     // select the element from the list
-  pEnc->reset(1, 1, 3, 1, 1, true);             // 1 - Kp, 2 - Ki, 3 - Kd
+  pEnc->reset(1, 1, 4, 1, 1, true);             // 1 - Kp, 2 - Ki, 3 - Kd, 4 - temp 
   Serial.println("Select the coefficient (Kp)");
+  update_screen = 0;
 }
 
 void pidSCREEN::rotaryValue(int16_t value) {
   if (mode == 0) {                              // No limit is selected, list the menu
+    Serial.print("[");
+    for (byte i = 1; i < 4; ++i) {
+      int k = pIron->changePID(i, -1);
+      Serial.print(k, DEC);
+      if (i < 3) Serial.print(", ");
+    }
+    Serial.print("]; ");
     switch (value) {
       case 1:
         Serial.println("Kp");
         break;
       case 2:
         Serial.println("Ki");
+        break;
+      case 4:
+        Serial.println(F("Temp"));
         break;
       case 3:
       default:
@@ -1699,43 +1742,54 @@ void pidSCREEN::rotaryValue(int16_t value) {
   } else {
     switch (mode) {
       case 1:
-        Serial.print("Kp = ");
+        Serial.print(F("Kp = "));
         pIron->changePID(mode, value);
         break;
       case 2:
-        Serial.print("Ki = ");
+        Serial.print(F("Ki = "));
+        pIron->changePID(mode, value);
+        break;
+      case 4:
+        Serial.print(F("Temp = "));
+        temp_set = value;
+        pIron->setTemp(value);
         break;
       case 3:
       default:
-        Serial.print("Kd = ");
+        Serial.print(F("Kd = "));
+        pIron->changePID(mode, value);
         break;
     }
-    pIron->changePID(mode, value);
     Serial.println(value);
   }
 }
 
 void pidSCREEN::show(void) {
+  if (millis() < update_screen) return;
+  update_screen = millis() + period;
   if (pIron->isOn()) {
     char buff[60];
     int temp    = pIron->getCurrTemp();
     uint16_t td = pIron->tempDispersion();
     uint16_t pd = pIron->powerDispersion();
     sprintf(buff, "%3d: td = %3d, pd = %3d --- ", temp_set - temp, td, pd);
-    Serial.print(buff);
-    if ((temp_set - temp) > 30) Serial.println("");
+    Serial.println(buff);
+    //if ((temp_set - temp) > 30) Serial.println("");
   }
-  delay(500);
 }
 
 SCREEN* pidSCREEN::menu(void) {                 // The rotary button pressed
   if (mode == 0) {                              // select upper or lower temperature limit
     mode = pEnc->read();
-    int k = pIron->changePID(mode, -1);
-    pEnc->reset(k, 0, 5000, 1, 5);
+    if (mode != 4) {
+      int k = pIron->changePID(mode, -1);
+      pEnc->reset(k, 0, 5000, 1, 5);
+    } else {
+      pEnc->reset(temp_set, 0, 970, 1, 5);
+    }
   } else {                                      // upper or lower temperature limit just setup     
     mode = 0;
-    pEnc->reset(1, 1, 3, 1, 1, true);           // 1 - Kp, 2 - Ki, 3 - Kd
+    pEnc->reset(1, 1, 4, 1, 1, true);           // 1 - Kp, 2 - Ki, 3 - Kd, 4 - temp
   }
   return this;
 }
@@ -1760,16 +1814,18 @@ BUZZER     simpleBuzzer(buzzerPIN);
 
 mainSCREEN   offScr(&iron, &disp, &rotEncoder, &simpleBuzzer, &ironCfg);
 workSCREEN   wrkScr(&iron, &disp, &rotEncoder, &simpleBuzzer, &ironCfg);
-errorSCREEN  errScr(&disp);
+errorSCREEN  errScr(&disp, &simpleBuzzer);
 powerSCREEN  powerScr(&iron, &disp, &rotEncoder);
 configSCREEN cfgScr(&iron, &disp, &rotEncoder, &ironCfg);
 tuneSCREEN   tuneScr(&iron, &disp, &rotEncoder, &simpleBuzzer, &ironCfg);
+//pidSCREEN    pidScr(&iron, &rotEncoder);
 
 SCREEN *pCurrentScreen = &offScr;
+//SCREEN *pCurrentScreen = &pidScr;
 
 // the setup routine runs once when you press reset:
 void setup() {
-//  Serial.begin(115200);
+  //Serial.begin(9600);
   disp.init();
 
   // Load configuration parameters
