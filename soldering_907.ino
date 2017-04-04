@@ -240,7 +240,7 @@ class IRON_CFG : public CONFIG {
     uint16_t t_tip[3];
     const uint16_t def_tip[3] = {587, 751, 916};// Default values of internal sensor readings at reference temperatures
     const uint16_t def_set = 653;               // Default preset temperature in internal units
-    const uint16_t ambient_temp  = 370;         // Ambient temperatire in the internal units
+    const uint16_t ambient_temp  = 300;         // Ambient temperatire in the internal units
     const uint16_t ambient_tempC = 25;          // Ambient temperature in Celsius
 };
 
@@ -254,7 +254,7 @@ void IRON_CFG::init(void) {
 }
 
 bool IRON_CFG::isCold(uint16_t temp) {
-  return (temp < t_tip[0]) && (map(temp, 0, t_tip[0], ambient_tempC, temp_tip[0]) < 32);
+  return (temp < t_tip[0]) && (map(temp, ambient_temp, t_tip[0], ambient_tempC, temp_tip[0]) < 32);
 }
 
 uint16_t IRON_CFG::tempPresetHuman(void) {
