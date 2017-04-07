@@ -251,6 +251,12 @@ void IRON_CFG::init(void) {
   t_tip[0] = cd & 0x3FF; cd >>= 10;             // 10 bits per calibration parameter, because the ADC readings are 10 bits
   t_tip[1] = cd & 0x3FF; cd >>= 10;
   t_tip[2] = cd & 0x3FF;
+  // Check the tip calibration is correct
+  if ((t_tip[0] >= t_tip[1]) || (t_tip[1] >= t_tip[2])) {
+    setDefaults();
+    for (byte i = 0; i < 3; ++i)
+      t_tip[i] = def_tip[i];
+  }
 }
 
 bool IRON_CFG::isCold(uint16_t temp) {
