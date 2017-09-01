@@ -695,6 +695,7 @@ void DSPL::setupMode(byte mode, byte p) {
       break;
     case 2:
       LiquidCrystal::print(F("calib. "));
+      break;
     case 3:
       LiquidCrystal::print(F("tune"));
       break;
