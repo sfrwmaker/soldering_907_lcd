@@ -33,11 +33,9 @@ const byte buzzerPIN = 11;                      // The simple buzzer to make a n
 
 const uint16_t temp_minC = 180;                 // Minimum temperature in degrees of celsius
 const uint16_t temp_maxC = 400;                 // Maximum temperature in degrees of celsius
-const uint16_t temp_max  = 950;                 // Maximum possible temparature in internal units
 const uint16_t temp_minF = (temp_minC *9 + 32*5 + 2)/5;
 const uint16_t temp_maxF = (temp_maxC *9 + 32*5 + 2)/5;
 const uint16_t temp_tip[3] = {200, 300, 400};
-const uint16_t ambient_tempC = 25;              // Ambient temperature in Celsius
 
 // The variables for Timer1 operations
 volatile uint16_t  tmr1_count;                  // The count to calculate the temperature check period
@@ -230,10 +228,9 @@ class IRON_CFG : public CONFIG {
     bool     getTempUnits(void)                 { return Config.celsius; }
     bool     savePresetTempHuman(uint16_t temp);// Save preset temperature in the human readable units
     bool     savePresetTemp(uint16_t temp);     // Save preset temperature in the internal units (convert it to the human readable units)
-    void     applyCalibration(uint16_t tip[3]); // Apply calibration data, used during calibration procedure
     void     saveConfig(byte off, bool cels);   // Save global configuration parameters
-    void     getCalibrationData(uint16_t tip[3]);
-    void     saveCalibrationData(uint16_t tip[3]);
+    void     getCalibrationData(uint16_t& t_min, uint16_t& t_mid, uint16_t& t_max);
+    void     saveCalibrationData(uint16_t t_min, uint16_t t_mid, uint16_t t_max);
     void     setDefaults(bool Write = false);   // Set default parameter values if failed to load data from EEPROM
   private:
     byte     current_tip;                       // The current tip index
@@ -316,11 +313,6 @@ bool IRON_CFG::savePresetTemp(uint16_t temp) {
   return CONFIG::save();
 }
 
-void IRON_CFG::applyCalibration(uint16_t tip[3]) {
-  for (byte i = 0; i < 3; ++i)
-    t_tip[i] = tip[i];
-}
-
 void IRON_CFG::saveConfig(byte off, bool cels) {
   if (off > 30) off = 0;
   Config.off_timeout = off;
@@ -328,22 +320,21 @@ void IRON_CFG::saveConfig(byte off, bool cels) {
   CONFIG::save();                               // Save new data into the EEPROM
 }
 
-void IRON_CFG::getCalibrationData(uint16_t tip[3]) {
-  tip[0] = t_tip[0];
-  tip[1] = t_tip[1];
-  tip[2] = t_tip[2];
+void IRON_CFG::getCalibrationData(uint16_t& t_min, uint16_t& t_mid, uint16_t& t_max) {
+  t_min = t_tip[0];
+  t_mid = t_tip[1];
+  t_max = t_tip[2];
 }
 
-void IRON_CFG::saveCalibrationData(uint16_t tip[3]) {
-  if (tip[3] > temp_max) tip[3] = temp_max;
-  uint32_t cd = tip[2] & 0x3FF; cd <<= 10;      // Pack tip calibration data in one 32-bit word: 10-bits per value
-  cd |= tip[1] & 0x3FF; cd <<= 10;
-  cd |= tip[0];
+void IRON_CFG::saveCalibrationData(uint16_t t_min, uint16_t t_mid, uint16_t t_max) {
+  uint32_t cd = t_max & 0x3FF; cd <<= 10;       // Pack tip calibration data in one 32-bit word: 10-bits per value
+  cd |= t_mid & 0x3FF; cd <<= 10;
+  cd |= t_min;
 
   Config.calibration = cd;
-  t_tip[0] = tip[0];
-  t_tip[2] = tip[1];
-  t_tip[2] = tip[2];
+  t_tip[0] = t_min;
+  t_tip[2] = t_mid;
+  t_tip[2] = t_max;
 }
 
 void IRON_CFG::setDefaults(bool Write) {
@@ -1608,39 +1599,36 @@ class calibSCREEN : public SCREEN {
     virtual SCREEN* menu_long(void);
   private:
     uint16_t  selectTemp(void);                 // Calculate the value of the temperature limit depending on mode
-    void      buildCalibration(uint16_t tip[3]);
     IRON*     pIron;                            // Pointer to the IRON instance
     DSPL*     pD;                               // Pointer to the DSPLay instance
     ENCODER*  pEnc;                             // Pointer to the rotary encoder instance
     IRON_CFG* pCfg;                             // Pointer to the config instance
     BUZZER*   pBz;                              // Pointer to the buzzer instance
     byte      mode;                             // Which parameter to change: t_min, t_mid, t_max
-    uint16_t  calib_temp[2][4];                 // The calibration data: real temp. [0] and temp. in internal units [1]
+    uint16_t  real_temp[2][3];                  // Real temperature measured at each of calibration points (real_temp, internal_temp)
     uint16_t  preset_temp;                      // The preset temp in human readable units
     bool      cels;                             // Current celsius/farenheit;
     bool      ready;                            // Whether the temperature has been established
     bool      tune;                             // Whether the parameter is modifiying
     bool      show_current;                     // Whether show the current temperature
-    const uint16_t t_diff = 60;                 // The adjustement could be in the interval [t_ref-t_diff; t_ref+2*t_diff]
     const uint32_t period = 1000;               // Update screen period
 };
 
 void calibSCREEN::init(void) {
   mode = 0;
-  pEnc->reset(mode, 0, 2, 1, 0, true);          // 0 - temp_tip[0], 1 - temp_tip[1], 2 - temp_tip[2] (temp_tip is global array)
+  pEnc->reset(mode, 0, 2, 1, 0, true);          // 0 - temp_tip[0], 1 - temp_tip[1], 2 - temp_tip[2]
   pIron->switchPower(false);
   tune  = false;
   ready = false;
-  show_current = true;                          // Show the current temperature
-  for (byte i = 1; i < 4; ++i)
-    calib_temp[0][i] = temp_tip[i-1];
-  calib_temp[0][0] = ambient_tempC;
-  pCfg->getCalibrationData(&calib_temp[1][1]);
+  show_current = true;
+  for (byte i = 0; i < 3; ++i)
+    real_temp[0][i] = temp_tip[i];
+  pCfg->getCalibrationData(real_temp[1][0], real_temp[1][1], real_temp[1][2]);
   cels        = pCfg->getTempUnits();
   pD->clear();
   pD->msgOff();
   uint16_t temp = selectTemp();
-  pD->tSet(temp, cels);
+  pD->tSet(temp, pCfg->getTempUnits());
   preset_temp = pIron->getTemp();               // Save the preset temperature in humen readable units
   preset_temp = pCfg->tempHuman(preset_temp);
   forceRedraw();
@@ -1649,8 +1637,8 @@ void calibSCREEN::init(void) {
 void calibSCREEN::show(void) {
   if (millis() < update_screen) return;
   update_screen = millis() + period;
-  int temp      = pIron->tempAverage();
-  int temp_set  = pIron->getTemp();
+  int temp = pIron->tempAverage();
+  int temp_set = pIron->getTemp();
   if (show_current) {                           // Show the current Iron temperature
     uint16_t tempH = pCfg->tempHuman(temp);     // Translate the temperature into human readable value
     pD->tCurr(tempH);
@@ -1658,7 +1646,7 @@ void calibSCREEN::show(void) {
   byte p = pIron->appliedPower();
   if (!pIron->isOn()) p = 0;
   pD->percent(p);
-  if (tune && (abs(temp_set - temp) < 4) && (pIron->tempDispersion() <= 20))  {
+  if (tune && (abs(temp_set - temp) < 3) && (pIron->tempDispersion() <= 6))  {
     if (!ready) {
       pBz->shortBeep();
       pD->msgReady();
@@ -1682,7 +1670,7 @@ void calibSCREEN::rotaryValue(int16_t value) {
   } else {                                      // select the temperature to be calibrated, t_min, t_mid or t_max
     mode = value;
     uint16_t temp = selectTemp();
-    pD->tSet(temp, cels);
+    pD->tSet(temp, pCfg->getTempUnits());
   }
 }
 
@@ -1693,26 +1681,22 @@ SCREEN* calibSCREEN::menu(void) {
     uint16_t temp   = pIron->tempAverage();     // The temperature on the IRON
     pIron->switchPower(false);
     pD->msgOff();
-    if (ready) {
-      if (!cels)                                // Always save the human readable temperature in Celsius
-        r_temp = map(r_temp, temp_minF, temp_maxF, temp_minC, temp_maxC);
-      calib_temp[0][mode+1] = r_temp;
-      calib_temp[1][mode+1] = temp;
-      uint16_t tip[3];
-      buildCalibration(tip);
-      pCfg->applyCalibration(tip);
-    }
+   if (!cels)                                   // Always save the human readable temperature in Celsius
+    r_temp = map(r_temp, temp_minF, temp_maxF, temp_minC, temp_maxC);
+    real_temp[0][mode] = r_temp;
+    real_temp[1][mode] = temp;
     pEnc->reset(mode, 0, 2, 1, 0, true);        // The temperature limit has been adjusted, switch to select mode
   } else {
     tune = true;
     uint16_t temp = selectTemp();
-    uint16_t minT = temp_tip[mode] - t_diff;    // Minimum input temperature (Celsius)
-    uint16_t maxT = temp_tip[mode] + 2*t_diff;  // Maximum input temperature (Celsius)
+    uint16_t minT = 100;                        // Minimum input temperature (Celsius)
+    uint16_t maxT = 550;                        // Maximum input temperature (Celsius)
     if (!cels) {
       minT = map(minT, temp_minC, temp_maxC, temp_minF, temp_maxF);
       maxT = map(maxT, temp_minC, temp_maxC, temp_minF, temp_maxF);
     }
-    pEnc->reset(temp, minT, maxT, 1, 5);        // Now rotary encoder is ready to input real temperature value
+    pEnc->reset(temp, minT, maxT, 1, 5);
+    tune = true;
     temp = pCfg->human2temp(temp);
     pIron->setTemp(temp);
     pIron->switchPower(true);
@@ -1726,9 +1710,13 @@ SCREEN* calibSCREEN::menu(void) {
 
 SCREEN* calibSCREEN::menu_long(void) {
   pIron->switchPower(false);
-  uint16_t tip[3];
-  buildCalibration(tip);
-  pCfg->saveCalibrationData(tip);
+  // temp_tip - array of calibration temperatures in Celsius
+  uint16_t t_min = map(temp_tip[0], real_temp[0][0], real_temp[0][1], real_temp[1][0], real_temp[1][1]);
+  uint16_t t_mid = map(temp_tip[1], real_temp[0][0], real_temp[0][1], real_temp[1][0], real_temp[1][1]);
+  t_mid += map(temp_tip[1], real_temp[0][1], real_temp[0][2], real_temp[1][1], real_temp[1][2]) + 1;
+  t_mid >>= 1;
+  uint16_t t_max = map(temp_tip[2], real_temp[0][1], real_temp[0][2], real_temp[1][1], real_temp[1][2]);
+  pCfg->saveCalibrationData(t_min, t_mid, t_max);
   pCfg->savePresetTempHuman(preset_temp);
   uint16_t temp = pCfg->human2temp(preset_temp);
   pIron->setTemp(temp);
@@ -1737,23 +1725,10 @@ SCREEN* calibSCREEN::menu_long(void) {
 }
 
 uint16_t calibSCREEN::selectTemp(void) {
-  uint16_t temp_calib = temp_tip[mode];         // temp_tip is a global variable
+  uint16_t temp_calib = temp_tip[mode];         // Global variable
   if (!cels)                                    // Translate the temperature into the Farenheits
     temp_calib = map(temp_calib, temp_minC, temp_maxC, temp_minF, temp_maxF);
   return temp_calib;
-}
-
-void calibSCREEN::buildCalibration(uint16_t tip[3]) {
-  // temp_tip is global array of calibration temperatures in Celsius
-  for (byte i = 1; i < 3; ++i) {
-    tip[i-1]  = map(temp_tip[i-1], calib_temp[0][i-1], calib_temp[0][i], calib_temp[1][i-1], calib_temp[1][i]);
-    tip[i-1] += map(temp_tip[i-1], calib_temp[0][i], calib_temp[0][i+1], calib_temp[1][i], calib_temp[1][i+1]);
-    tip[i-1] >>= 1;
-  }
-  tip[2]  = map(temp_tip[2], calib_temp[0][2], calib_temp[0][3], calib_temp[1][2], calib_temp[1][3]);
-  tip[2] += map(temp_tip[2], calib_temp[0][1], calib_temp[0][3], calib_temp[1][1], calib_temp[1][3]);
-  tip[2] >>= 1;
-  if (tip[2] > temp_max) tip[2] = temp_max;
 }
 
 //---------------------------------------- class tuneSCREEN [tune the potentiometer ] --------------------------
