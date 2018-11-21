@@ -206,7 +206,7 @@ bool CONFIG::readRecord(uint16_t addr, uint32_t &recID) {
 }
 
 void CONFIG::clearAll(void) {
-  for (int i = 0; i < eLength; ++i)
+  for (uint16_t i = 0; i < eLength; ++i)
     EEPROM.write(i, 0);
   init();
   load();
@@ -229,7 +229,7 @@ class IRON_CFG : public CONFIG {
     bool     savePresetTempHuman(uint16_t temp);// Save preset temperature in the human readable units
     bool     savePresetTemp(uint16_t temp);     // Save preset temperature in the internal units (convert it to the human readable units)
     void     saveConfig(byte off, bool cels);   // Save global configuration parameters
-	  void     applyCalibrationData(uint16_t tip[3]);
+	void     applyCalibrationData(uint16_t tip[3]);
     void     getCalibrationData(uint16_t tip[3]);
     void     saveCalibrationData(uint16_t tip[3]);
     void     setDefaults(bool Write = false);   // Set default parameter values if failed to load data from EEPROM
@@ -243,7 +243,7 @@ class IRON_CFG : public CONFIG {
     const uint16_t def_set = 653;               // Default preset temperature in internal units
     const uint16_t ambient_temp  = 350;         // Ambient temperatire in the internal units
     const uint16_t ambient_tempC = 25;          // Ambient temperature in Celsius
-	  const uint16_t max_temp      = 960;         // Maximum possible temperature readings in internal units
+	const uint16_t max_temp      = 960;         // Maximum possible temperature readings in internal units
 };
 
 void IRON_CFG::init(void) {
@@ -269,40 +269,66 @@ uint16_t IRON_CFG::tempPresetHuman(void) {
   return tempHuman(Config.temp);
 }
 
-uint16_t IRON_CFG::human2temp(uint16_t t) {     // Translate the human readable temperature into internal value
-  uint16_t temp = t;
-  if (!Config.celsius)
-    temp = map(temp, temp_minF, temp_maxF, temp_minC, temp_maxC);
-  if (t < temp_minC) t = temp_minC;
-  if (t > temp_maxC) t = temp_maxC;
-  if (t >= temp_tip[1])
-    temp = map(t+1, temp_tip[1], temp_tip[2], t_tip[1], t_tip[2]);
-  else
-    temp = map(t+1, temp_tip[0], temp_tip[1], t_tip[0], t_tip[1]);
- 
-  for (byte i = 0; i < 10; ++i) {
-    uint16_t tH = tempHuman(temp);
-    if (tH <= t) break;
-    --temp;
-  }
-  return temp;
+// Translate the temperature from human readable units (Celsius or Fahrenheit) to the internal units
+uint16_t IRON_CFG::human2temp(uint16_t t) {
+    uint16_t t0 = temp_tip[0];
+    uint16_t t2 = temp_tip[2];
+    if (!Config.celsius) {                      // Translate the temperature limits to Fahrenheit
+		t0 = map(t0, temp_minC, temp_maxC, temp_minF, temp_maxF);
+        t2 = map(t2, temp_minC, temp_maxC, temp_minF, temp_maxF);
+        if (t < temp_minF) t = temp_minF;
+        if (t > temp_maxF) t = temp_maxF;
+	} else {
+        if (t < temp_minC) t = temp_minC;
+        if (t > temp_maxC) t = temp_maxC;
+	}
+	uint16_t left 	= 0;
+	uint16_t right 	= max_temp;
+	uint16_t temp   = map(t, t0, t2, t_tip[0], t_tip[2]);
+
+	if (temp > (left+right) / 2) {
+		temp -= (right-left) / 4;
+	} else {
+		temp += (right-left) / 4;
+	}
+
+	for (uint8_t i = 0; i < 20; ++i) {
+		uint16_t tempH = tempHuman(temp);
+		if (tempH == t) {
+			return temp;
+		}
+		uint16_t new_temp;
+		if (tempH < t) {
+			left = temp;
+			 new_temp = (left+right)/2;
+			if (new_temp == temp)
+				new_temp = temp + 1;
+		} else {
+			right = temp;
+			new_temp = (left+right)/2;
+			if (new_temp == temp)
+				new_temp = temp - 1;
+		}
+		temp = new_temp;
+	}
+	return temp;
 }
 
 // Thanslate temperature from internal units to the human readable value (Celsius or Farenheit)
 uint16_t IRON_CFG::tempHuman(uint16_t temp) {
-  uint16_t tempH = 0;
-  if (temp < ambient_temp) {
-    tempH = ambient_tempC;
-  } else if (temp < t_tip[0]) {
-    tempH = map(temp, ambient_temp, t_tip[0], ambient_tempC, temp_tip[0]);
-  } else if (temp >= t_tip[1]) {
-    tempH = map(temp, t_tip[1], t_tip[2], temp_tip[1], temp_tip[2]);
-  } else {
-    tempH = map(temp, t_tip[0], t_tip[1], temp_tip[0], temp_tip[1]);
-  }
-  if (!Config.celsius)
-    tempH = map(tempH, temp_minC, temp_maxC, temp_minF, temp_maxF);
-  return tempH;
+    uint16_t tempH = 0;
+    if (temp < ambient_temp) {
+        tempH = ambient_tempC;
+    } else if (temp < t_tip[0]) {
+        tempH = map(temp, ambient_temp, t_tip[0], ambient_tempC, temp_tip[0]);
+    } else if (temp >= t_tip[1]) {
+        tempH = map(temp, t_tip[1], t_tip[2], temp_tip[1], temp_tip[2]);
+    } else {
+        tempH = map(temp, t_tip[0], t_tip[1], temp_tip[0], temp_tip[1]);
+    }
+    if (!Config.celsius)
+        tempH = map(tempH, temp_minC, temp_maxC, temp_minF, temp_maxF);
+    return tempH;
 }
 
 bool IRON_CFG::savePresetTempHuman(uint16_t temp) {
@@ -962,7 +988,7 @@ class IRON : protected PID {
     const byte     max_fixed_power = 120;       // Maximum power in fiexed power mode
     const uint16_t check_time      = 10000;     // Time in ms to check Whether the solder is heating
     const uint16_t heat_expected   = 10;        // The iron should change the temperature at check_time
-	  const uint32_t check_iron_ms   = 1000;      // The period in ms to check Whether the IRON is conected
+	const uint32_t check_iron_ms   = 1000;      // The period in ms to check Whether the IRON is conected
 };
 
 void IRON::setTemp(uint16_t t) {
@@ -1040,39 +1066,41 @@ void IRON::checkIron(void) {
 }
 
 void IRON::keepTemp(void) {
-  uint16_t temp = analogRead(sPIN);             // Check the IRON temperature
-  if (actual_power > 0)                         // Restore the power applied to the IRON
-    fastPWM.duty(actual_power);
+	uint16_t temp = analogRead(sPIN);			// Check the IRON temperature
+	if (actual_power > 0)						// Restore the power applied to the IRON
+		fastPWM.duty(actual_power);
 
-  if (temp < temp_no_iron) {
-    h_temp.put(temp);
-    no_iron = false;
-  } else {
-    no_iron = true;
-    h_temp.init();
-  }
+	if (temp < temp_no_iron) {
+		h_temp.put(temp);
+		no_iron = false;
+	} else {
+		no_iron = true;
+		h_temp.init();
+	}
 
-  if (on) {
-    if (chill) {
-      if (temp < (temp_set - 4)) {
-        chill = false;
-        resetPID();
-      } else {
-        power = 0;
-        actual_power = 0;
-        fastPWM.duty(actual_power);
-        return;
-      }
-    }
-    power = reqPower(temp_set, temp);           // Use PID algoritm to calculate power to be applied
-    int p = constrain(power, 0, max_power);
-    if (temp > (temp_set + 100)) p = 0;         // Prevent the overheating (about 50 Celsius)
-    actual_power = p & 0xff;
-    h_power.put(actual_power);
-    fastPWM.duty(actual_power);
-  } else {
-    if (!fix_power) actual_power = 0;
-  }
+	if (on) {
+		if (chill) {
+			if (temp < (temp_set - 4)) {		// About 2 Celsius degrees lower than preset temperature
+				chill = false;
+				resetPID();
+			} else {
+				power = 0;
+				actual_power = 0;
+				fastPWM.duty(actual_power);
+				return;
+			}
+		}
+		power = reqPower(temp_set, temp);		// Use PID algoritm to calculate power to be applied
+		actual_power = constrain(power, 0, max_power);
+		if (temp > (temp_set + 100)) {			// Prevent the overheating (about 50 Celsius degrees)
+			actual_power = 0;
+			chill = true;
+		}
+		h_power.put(actual_power);
+		fastPWM.duty(actual_power);
+	} else {
+		if (!fix_power) actual_power = 0;
+	}
 }
 
 bool IRON::fixPower(byte Power) {
@@ -1199,10 +1227,10 @@ void mainSCREEN::init(void) {
 }
 
 void mainSCREEN::rotaryValue(int16_t value) {
-  update_screen = millis() + period;
-  uint16_t temp = pCfg->human2temp(value);
-  pIron->setTemp(temp);
-  pD->tSet(value, is_celsius);
+    update_screen = millis() + period;
+    uint16_t temp = pCfg->human2temp(value);
+    pIron->setTemp(temp);
+    pD->tSet(value, is_celsius);
 }
 
 void mainSCREEN::show(void) {
@@ -1265,23 +1293,23 @@ class workSCREEN : public SCREEN {
 };
 
 void workSCREEN::init(void) {
-  uint16_t temp_set = pIron->getTemp();
-  bool is_celsius = pCfg->isCelsius();
-  uint16_t tempH = pCfg->tempHuman(temp_set);
-  if (is_celsius)
-    pEnc->reset(tempH, temp_minC, temp_maxC, 1, 5);
-  else
-    pEnc->reset(tempH, temp_minF, temp_maxF, 1, 5);
-  pIron->switchPower(true);
-  ready = false;
-  pD->clear();
-  pD->tSet(tempH, is_celsius);
-  pD->msgOn();
-  uint16_t to = pCfg->getOffTimeout() * 60;
-  this->setSCRtimeout(to);
-  idle_power.init();
-  auto_off_notified = 0;
-  forceRedraw();
+	uint16_t temp_set	= pIron->getTemp();
+	bool is_celsius		= pCfg->isCelsius();
+	uint16_t tempH		= pCfg->tempHuman(temp_set);
+	if (is_celsius)
+		pEnc->reset(tempH, temp_minC, temp_maxC, 1, 5);
+	else
+		pEnc->reset(tempH, temp_minF, temp_maxF, 1, 5);
+	pIron->switchPower(true);
+	ready = false;
+	pD->clear();
+	pD->tSet(tempH, is_celsius);
+	pD->msgOn();
+	uint16_t to = pCfg->getOffTimeout() * 60;
+	this->setSCRtimeout(to);
+	idle_power.init();
+	auto_off_notified = 0;
+	forceRedraw();
 }
 
 void workSCREEN::rotaryValue(int16_t value) {
@@ -1977,23 +2005,21 @@ SCREEN *pCurrentScreen = &offScr;
  */
 const uint32_t period_ticks = (31250 * check_period)/1000-33-5;
 ISR(TIMER1_OVF_vect) {
-  if (iron_off) {                                     // The IRON is switched off, we need to chack the temperature
-    if (++tmr1_count >= 33) {                         // about 1 millisecond
-      TIMSK1 &= ~_BV(TOIE1);                          // disable the overflow interrupts
-      iron.keepTemp();                                // Check the temp. If on, keep the temperature
-      tmr1_count = 0;
-      iron_off = false;
-      TIMSK1 |= _BV(TOIE1);                           // enable the the overflow interrupts
-    }
-  } else {                                            // The IRON is on, check the curent and switch-off the IRON
-    if (++tmr1_count >= period_ticks) {
-      TIMSK1 &= ~_BV(TOIE1);                          // disable the overflow interrupts
-      tmr1_count = 0;
-      OCR1B      = 0;                                 // Switch-off the power to check the temperature
-      iron_off   = true;
-      TIMSK1    |= _BV(TOIE1);                        // enable the overflow interrupts
-    }
-  }
+	TIMSK1 &= ~_BV(TOIE1);								// disable the overflow interrupts
+	if (iron_off) {										// The IRON is switched off, we need to check the temperature
+		if (++tmr1_count >= 33) {						// about 1 millisecond
+			iron.keepTemp();							// Check the temp. If on, keep the temperature
+			tmr1_count = 0;
+			iron_off = false;
+		}
+	} else {											// The IRON is on, check the curent and switch-off the IRON
+		if (++tmr1_count >= period_ticks) {
+			tmr1_count = 0;
+			OCR1B      = 0;								// Switch-off the power to check the temperature
+			iron_off   = true;
+		}
+	}
+	TIMSK1 |= _BV(TOIE1);								// enable the the overflow interrupts
 }
 
 void rotEncChange(void) {
@@ -2006,7 +2032,7 @@ void rotPushChange(void) {
 
 // the setup routine runs once when you press reset:
 void setup() {
-  //Serial.begin(9600);
+//  Serial.begin(115200);
   disp.init();
 
   // Load configuration parameters
