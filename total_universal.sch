@@ -13919,6 +13919,7 @@ W = angled&lt;p&gt;
 <part name="JP5" library="jumper" library_urn="urn:adsk.eagle:library:252" deviceset="JP1E" device="" package3d_urn="urn:adsk.eagle:package:15455/1"/>
 <part name="JP6" library="jumper" library_urn="urn:adsk.eagle:library:252" deviceset="JP1E" device="" package3d_urn="urn:adsk.eagle:package:15455/1"/>
 <part name="R9" library="rcl" library_urn="urn:adsk.eagle:library:334" deviceset="R-EU_" device="0204/5" package3d_urn="urn:adsk.eagle:package:23488/1" value="100k"/>
+<part name="R10" library="rcl" library_urn="urn:adsk.eagle:library:334" deviceset="R-EU_" device="0204/5" package3d_urn="urn:adsk.eagle:package:23488/1" value="5.1k"/>
 </parts>
 <sheets>
 <sheet>
@@ -14098,6 +14099,10 @@ W = angled&lt;p&gt;
 <attribute name="NAME" x="24.13" y="59.9186" size="1.778" layer="95"/>
 <attribute name="VALUE" x="24.13" y="55.118" size="1.778" layer="96"/>
 </instance>
+<instance part="R10" gate="G$1" x="25.4" y="20.32" rot="R90">
+<attribute name="NAME" x="23.9014" y="16.51" size="1.778" layer="95" rot="R90"/>
+<attribute name="VALUE" x="28.702" y="16.51" size="1.778" layer="96" rot="R90"/>
+</instance>
 </instances>
 <busses>
 </busses>
@@ -14112,6 +14117,10 @@ W = angled&lt;p&gt;
 <wire x1="17.78" y1="15.24" x2="17.78" y2="27.94" width="0.1524" layer="91"/>
 <wire x1="17.78" y1="27.94" x2="-10.16" y2="27.94" width="0.1524" layer="91"/>
 <junction x="-10.16" y="27.94"/>
+<pinref part="R10" gate="G$1" pin="2"/>
+<wire x1="25.4" y1="25.4" x2="25.4" y2="27.94" width="0.1524" layer="91"/>
+<wire x1="25.4" y1="27.94" x2="17.78" y2="27.94" width="0.1524" layer="91"/>
+<junction x="17.78" y="27.94"/>
 </segment>
 </net>
 <net name="N$2" class="0">
@@ -14278,6 +14287,9 @@ W = angled&lt;p&gt;
 <pinref part="R2" gate="G$1" pin="1"/>
 <wire x1="27.94" y1="2.54" x2="25.4" y2="2.54" width="0.1524" layer="91"/>
 <junction x="25.4" y="2.54"/>
+<pinref part="R10" gate="G$1" pin="1"/>
+<wire x1="25.4" y1="10.16" x2="25.4" y2="15.24" width="0.1524" layer="91"/>
+<junction x="25.4" y="10.16"/>
 </segment>
 </net>
 <net name="N$5" class="0">

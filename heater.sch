@@ -5983,6 +5983,7 @@ Source: http://www.mouser.com/ds/2/392/products_18-2245.pdf</description>
 <part name="GND1" library="supply1" library_urn="urn:adsk.eagle:library:371" deviceset="GND" device=""/>
 <part name="P+1" library="supply1" library_urn="urn:adsk.eagle:library:371" deviceset="+24V" device=""/>
 <part name="JP2" library="pinhead" library_urn="urn:adsk.eagle:library:325" deviceset="PINHD-1X1" device="" package3d_urn="urn:adsk.eagle:package:22485/2" value="ARDUINO_D10"/>
+<part name="R10" library="rcl" library_urn="urn:adsk.eagle:library:334" deviceset="R-EU_" device="0204/5" package3d_urn="urn:adsk.eagle:package:23488/1" value="5.1k"/>
 </parts>
 <sheets>
 <sheet>
@@ -6031,6 +6032,10 @@ Source: http://www.mouser.com/ds/2/392/products_18-2245.pdf</description>
 <attribute name="NAME" x="80.01" y="66.675" size="1.778" layer="95"/>
 <attribute name="VALUE" x="80.01" y="58.42" size="1.778" layer="96"/>
 </instance>
+<instance part="R10" gate="G$1" x="58.42" y="81.28" rot="R90">
+<attribute name="NAME" x="56.9214" y="77.47" size="1.778" layer="95" rot="R90"/>
+<attribute name="VALUE" x="61.722" y="77.47" size="1.778" layer="96" rot="R90"/>
+</instance>
 </instances>
 <busses>
 </busses>
@@ -6049,6 +6054,9 @@ Source: http://www.mouser.com/ds/2/392/products_18-2245.pdf</description>
 <wire x1="50.8" y1="76.2" x2="50.8" y2="86.36" width="0.1524" layer="91"/>
 <wire x1="50.8" y1="86.36" x2="2.54" y2="86.36" width="0.1524" layer="91"/>
 <junction x="2.54" y="86.36"/>
+<pinref part="R10" gate="G$1" pin="2"/>
+<wire x1="58.42" y1="86.36" x2="50.8" y2="86.36" width="0.1524" layer="91"/>
+<junction x="50.8" y="86.36"/>
 </segment>
 </net>
 <net name="N$1" class="0">
@@ -6114,6 +6122,9 @@ Source: http://www.mouser.com/ds/2/392/products_18-2245.pdf</description>
 <pinref part="R2" gate="G$1" pin="1"/>
 <wire x1="66.04" y1="63.5" x2="58.42" y2="63.5" width="0.1524" layer="91"/>
 <junction x="58.42" y="63.5"/>
+<pinref part="R10" gate="G$1" pin="1"/>
+<wire x1="58.42" y1="76.2" x2="58.42" y2="71.12" width="0.1524" layer="91"/>
+<junction x="58.42" y="71.12"/>
 </segment>
 </net>
 <net name="N$6" class="0">
